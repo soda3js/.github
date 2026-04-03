@@ -1,0 +1,13 @@
+{
+	"$schema": "https://turborepo.com/schema.v2.json",
+	"globalPassThroughEnv": ["GITHUB_ACTIONS", "CI"],
+	"tasks": {
+		"types:check": {
+			"cache": true,
+			"dependsOn": [],
+			"inputs": ["*.ts", "lib/**/*.ts", "lib/**/*.mts"],
+			"outputLogs": "full",
+			"outputs": []
+		}
+	}
+}
