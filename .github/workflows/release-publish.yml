@@ -51,6 +51,7 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
+          lfs: true
 
       - name: Setup runtime
         id: runtime

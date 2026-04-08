@@ -58,6 +58,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          lfs: true
 
       - name: Setup runtime
         id: runtime
@@ -104,6 +106,7 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
+          lfs: true
 
       - name: Create validation checks
         id: create-checks
@@ -367,6 +370,7 @@ jobs:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
+          lfs: true
 
       - name: Check if PR only contains version/changelog changes
         if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
