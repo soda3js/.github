@@ -3,18 +3,20 @@ name: Release Dispatcher
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner type (e.g., ubuntu-latest)
+        type: string
+        required: false
+        default: ubuntu-latest
       dry-run:
         description: Run in dry-run mode (preview only)
         type: boolean
         default: false
-      app-bot-name:
-        description: GitHub App bot login name (e.g., 'my-app[bot]')
+      auto-merge:
+        description: Auto-merge strategy for pull requests (e.g., "squash", "merge", "rebase")
         type: string
         required: false
-      app-bot-id:
-        description: GitHub App bot ID for Claude Code Action
-        type: string
-        required: false
+        default: ""
       skip-claude-review:
         description: Skip Claude Code review for this run
         type: boolean
@@ -46,7 +48,7 @@ on:
 jobs:
   control:
     name: Detect Phase
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     permissions:
       contents: read
       pull-requests: read
@@ -60,14 +62,11 @@ jobs:
       is_pr_merged: ${{ steps.context.outputs.is_pr_merged }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          lfs: true
+        uses: actions/checkout@v7
 
       - name: Detect workflow phase
         id: control
-        uses: savvy-web/workflow-control-action@main
-
+        uses: savvy-web/silk-router-action@v1
       - name: Set context flags
         id: context
         run: |
@@ -81,6 +80,8 @@ jobs:
     uses: soda3js/.github/.github/workflows/release-branch.yml@main
     with:
       dry-run: ${{ inputs.dry-run }}
+      runner: ${{ inputs.runner }}
+      auto-merge: ${{ inputs.auto-merge }}
     secrets: inherit
 
   validation:
@@ -93,11 +94,11 @@ jobs:
     with:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
-      app-bot-name: ${{ inputs.app-bot-name }}
-      app-bot-id: ${{ inputs.app-bot-id }}
+      auto-merge: ${{ inputs.auto-merge }}
       skip-claude-review: ${{ inputs.skip-claude-review }}
       claude-review-allowed-bots: ${{ inputs.claude-review-allowed-bots }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
+      runner: ${{ inputs.runner }}
     secrets: inherit
 
   publish:
@@ -109,4 +110,5 @@ jobs:
       phase: ${{ needs.control.outputs.phase }}
       dry-run: ${{ inputs.dry-run }}
       sbom-config: ${{ vars.SILK_RELEASE_SBOM_TEMPLATE }}
+      runner: ${{ inputs.runner }}
     secrets: inherit

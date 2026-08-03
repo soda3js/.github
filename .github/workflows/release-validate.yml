@@ -3,6 +3,11 @@ name: PR Validation
 on:
   workflow_call:
     inputs:
+      runner:
+        description: Runner type (e.g., ubuntu-latest)
+        type: string
+        required: false
+        default: ubuntu-latest
       phase:
         description: The detected workflow phase
         type: string
@@ -11,14 +16,11 @@ on:
         description: Run in dry-run mode
         type: boolean
         default: false
-      app-bot-name:
-        description: GitHub App bot login name (e.g., 'my-app[bot]')
+      auto-merge:
+        description: Auto-merge strategy for pull requests (e.g., "squash", "merge", "rebase")
         type: string
         required: false
-      app-bot-id:
-        description: GitHub App bot ID for Claude Code Action
-        type: string
-        required: false
+        default: ""
       skip-claude-review:
         description: Skip Claude Code review for this run
         type: boolean
@@ -27,14 +29,20 @@ on:
         description: Comma-separated list of bot names allowed to trigger review, or "*" for all
         type: string
         default: "*"
+      claude-review-plugin-marketplaces:
+        description: Newline-separated Claude Code plugin marketplace git URLs to install before review. Empty string disables.
+        type: string
+        default: "https://github.com/spencerbeggs/bot.git"
+      claude-review-plugins:
+        description: Newline-separated Claude Code plugins (name@marketplace) to install before review. Empty string disables.
+        type: string
+        default: "design-docs@spencerbeggs"
       sbom-config:
         description: SBOM metadata configuration (JSON) for NTIA-compliant SBOM generation
         type: string
         required: false
         default: ""
     secrets:
-      APP_ID:
-        required: true
       APP_PRIVATE_KEY:
         required: true
       CLAUDE_CODE_OAUTH_TOKEN:
@@ -50,38 +58,48 @@ on:
 jobs:
   pre-publish:
     name: Pre-Publish Validation
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     if: inputs.phase == 'validation'
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      TURBO_RUN_SUMMARY: "1"
     permissions:
       contents: read
       pull-requests: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
-        with:
-          lfs: true
+        uses: actions/checkout@v7
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/workflow-runtime-action@main
+        uses: savvy-web/silk-runtime-action@v1
+        with:
+          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
+          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
+          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
+          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
+          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
 
       - name: Pre-publish validation
-        uses: savvy-web/workflow-release-action@main
+        uses: savvy-web/silk-release-action@v4
         with:
           phase: validation
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          app-client-id: ${{ vars.APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
           dry-run: ${{ inputs.dry-run }}
+          auto-merge: ${{ inputs.auto-merge }}
+          release-branch: changeset-release/main
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
           sbom-config: ${{ inputs.sbom-config }}
 
   validate:
     name: Code Validation
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     env:
+      TURBO_TELEMETRY_DISABLED: "1"
       DO_NOT_TRACK: "1"
-      TURBO_TELEMETRY_DISABLE: "1"
+      TURBO_RUN_SUMMARY: "1"
     permissions:
       contents: read
       checks: write
@@ -91,7 +109,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-contents: read
           permission-checks: write
@@ -100,17 +118,17 @@ jobs:
         run: sleep 5
 
       - name: Checkout repository
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
-          lfs: true
+          submodules: true
 
       - name: Create validation checks
         id: create-checks
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -134,7 +152,13 @@ jobs:
 
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/workflow-runtime-action@main
+        uses: savvy-web/silk-runtime-action@v1
+        with:
+          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
+          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
+          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
+          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
+          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
 
       - name: Detect package manager
         id: pm
@@ -163,7 +187,7 @@ jobs:
 
       - name: Update PR Title Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -185,7 +209,7 @@ jobs:
 
       - name: Update Commitlint Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -207,7 +231,7 @@ jobs:
 
       - name: Update Lint Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -268,7 +292,7 @@ jobs:
 
       - name: Update Markdownlint Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -312,7 +336,7 @@ jobs:
 
       - name: Update Test Check
         if: always()
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -327,12 +351,9 @@ jobs:
   claude-review:
     name: Claude Code Review
     needs: [validate]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     # Only run for human users, configured bot, or copilot (skip other bots like dependabot, renovate, etc.)
-    if: |
-      github.event.pull_request.user.login == inputs.app-bot-name ||
-      github.event.pull_request.user.login == 'copilot[bot]' ||
-      github.event.pull_request.user.type == 'User'
+    if: ${{ github.event.pull_request.user.login == vars.APP_BOT_NAME || github.event.pull_request.user.login == 'copilot[bot]' || github.event.pull_request.user.type == 'User' }}
     env:
       CHECK_RUN_ID: ""
       CLAUDE_COMMENT_ID: "0"
@@ -345,7 +366,7 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-contents: write
           permission-pull-requests: write
@@ -365,17 +386,25 @@ jobs:
 
       - name: Checkout repository
         if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ steps.app-token.outputs.token }}
           persist-credentials: true
-          lfs: true
 
       - name: Check if PR only contains version/changelog changes
         if: steps.check-config.outputs.configured == 'true' && inputs.skip-claude-review != true
         id: check-changes
         run: |
+          HEAD_REF="${{ github.head_ref }}"
+          case "$HEAD_REF" in
+            pnpm/config-deps | copilot/* | dependabot/* | changeset-release/*)
+              echo "skip-review=true" >> $GITHUB_OUTPUT
+              echo "Skipping Claude review - branch '$HEAD_REF' is an automated update (covered by preflight reviews)"
+              exit 0
+              ;;
+          esac
+
           git fetch origin ${{ github.base_ref }}
           CHANGED_FILES_WITH_STATUS=$(git diff --name-status origin/${{ github.base_ref }}...HEAD)
           CHANGED_FILES=$(git diff --name-only origin/${{ github.base_ref }}...HEAD)
@@ -421,7 +450,7 @@ jobs:
 
       - name: Create Claude Review check
         id: create-check
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -458,7 +487,7 @@ jobs:
 
       - name: Update check - Starting review
         if: steps.create-check.outputs.should-skip != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -493,21 +522,28 @@ jobs:
       - name: Find existing Claude review comment
         if: steps.create-check.outputs.should-skip != 'true'
         id: find-comment
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
-            const { data: comments } = await github.rest.issues.listComments({
+            // Paginate: on a busy PR the sticky comment is often past the first
+            // page of 30, and a miss here makes Claude think it is the first review.
+            const comments = await github.paginate(github.rest.issues.listComments, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              issue_number: context.payload.pull_request.number
+              issue_number: context.payload.pull_request.number,
+              per_page: 100
             });
 
-            const botName = '${{ inputs.app-bot-name }}';
-            const claudeComment = comments.find(comment =>
+            const botName = '${{ vars.APP_BOT_NAME }}';
+            const matches = comments.filter(comment =>
               comment.user.login === botName &&
               (comment.body.includes('# Code Review') || comment.body.includes('<!-- claude-code-review -->'))
             );
+
+            // Take the most recent match. Older ones are stale pre-sticky reviews;
+            // minimizing the wrong one would hide the live comment.
+            const claudeComment = matches.at(-1);
 
             if (claudeComment) {
               console.log(`Found existing Claude review comment: ${claudeComment.id}`);
@@ -525,16 +561,22 @@ jobs:
           GH_TOKEN: ${{ steps.app-token.outputs.token }}
           GITHUB_PAT: ${{ secrets.CLAUDE_REVIEW_PAT }}
           CLAUDE_COMMENT_ID: ${{ env.CLAUDE_COMMENT_ID }}
+          APP_BOT_NAME: ${{ vars.APP_BOT_NAME }}
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           github_token: ${{ steps.app-token.outputs.token }}
-          bot_id: ${{ inputs.app-bot-id }}
-          bot_name: ${{ inputs.app-bot-name }}
+          bot_id: ${{ vars.APP_BOT_ID }}
+          bot_name: ${{ vars.APP_BOT_NAME }}
           allowed_bots: ${{ inputs.claude-review-allowed-bots }}
+          plugin_marketplaces: ${{ inputs.claude-review-plugin-marketplaces }}
+          plugins: ${{ inputs.claude-review-plugins }}
           show_full_output: true
+          exclude_comments_by_actor: "socket-security[bot]"
           use_sticky_comment: true
           claude_args: |
-            --allowedTools "mcp__github__pull_request_read,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_review_comments,mcp__github__list_commits,mcp__github__get_commit,mcp__github__get_issue_comments,mcp__github__add_comment_to_pending_review,mcp__github__pull_request_review_write,mcp__github__create_pending_pull_request_review,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,mcp__github__get_job_logs,mcp__github__submit_pending_pull_request_review,Bash(gh:*),Bash(git:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(bash .github/scripts/minimize-review-comment.sh:*),Bash(bash .github/scripts/minimize-all-reviews.sh:*),Bash(bash .github/scripts/resolve-thread.sh:*),Read,Glob,Grep,Write(/tmp/**)"
+            --allowedTools "mcp__github__pull_request_read,mcp__github__get_pull_request,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__github__get_pull_request_status,mcp__github__get_pull_request_review_comments,mcp__github__list_commits,mcp__github__get_commit,mcp__github__get_issue_comments,mcp__github__add_comment_to_pending_review,mcp__github__pull_request_review_write,mcp__github__create_pending_pull_request_review,mcp__github__add_issue_comment,mcp__github_inline_comment__create_inline_comment,mcp__github_comment__update_claude_comment,mcp__github__get_job_logs,mcp__github__submit_pending_pull_request_review,Bash(gh:*),Bash(git:*),Bash(jq:*),Bash(cat:*),Bash(echo:*),Bash(bash .github/scripts/gh-pr-review.sh:*),Read,Glob,Grep,Write(/tmp/**),Skill"
+            --disallowedTools "Agent,Task"
+            --model "claude-opus-4-8"
           prompt: |
             # Pull Request Context
 
@@ -568,16 +610,24 @@ jobs:
             - MCP tools use the GitHub App token which has full permissions
             - **Exception:** For check runs, use `gh api` (see section 1.3) - the MCP `get_status` method queries the legacy status API which is empty
 
-            **Helper Scripts** (.github/scripts/):
-            - Ready-to-use scripts for complex review management operations
-            - Call via bash interpreter (scripts are not executable):
-              - `bash .github/scripts/resolve-thread.sh <comment_id> <pr_number> <commit_sha> [repo_owner] [repo_name]` - Reply to thread and mark as resolved (COMMONLY USED)
-              - `bash .github/scripts/minimize-review-comment.sh <comment_id> <commit_sha> [repo_owner] [repo_name]` - Minimize a specific old review comment as outdated (RARELY NEEDED - sticky comments auto-update)
-              - `bash .github/scripts/minimize-all-reviews.sh <pr_number> <current_sha> [bot_login] [repo_owner] [repo_name]` - Minimize all old review summaries (RARELY NEEDED - sticky comments auto-update)
+            **Helper Script** (.github/scripts/gh-pr-review.sh):
+            - A single consolidated script with subcommands for review-management operations
+            - Call via bash interpreter (the script is not executable):
+              - `bash .github/scripts/gh-pr-review.sh resolve-thread <comment_id> <pr_number> <commit_sha>` - Reply to a review-comment thread and mark it resolved (COMMONLY USED)
+              - `bash .github/scripts/gh-pr-review.sh minimize-comment <comment_id>` - Minimize a single old comment as OUTDATED (RARELY NEEDED - sticky comments auto-update)
+              - `bash .github/scripts/gh-pr-review.sh minimize-old-summaries <pr_number> <current_sha>` - Minimize old bot review-summary comments, excluding the sticky comment and any that mention the current SHA (RARELY NEEDED)
+              - `bash .github/scripts/gh-pr-review.sh check-status <commit_sha>` - Print the filtered validation check-run status for a commit (see section 1.3)
+              - `bash .github/scripts/gh-pr-review.sh approve-pr <pr_number> <commit_sha> [body]` - Submit a formal APPROVE review (see "Approving the PR" in Step 4; use ONLY when the PR is clean)
+            - Repo owner/name are read automatically from `GITHUB_REPOSITORY`; do not pass them.
             - Use when MCP tools + simple bash can't accomplish the task
-            - Repo owner/name default to ${{ github.repository_owner }}/${{ github.event.repository.name }} if not specified
             - **Note:** With sticky comments enabled, you rarely need to minimize anything
-            - **Tokens:** Helper scripts automatically use `GITHUB_PAT` for operations requiring special permissions (resolving/minimizing threads)
+
+            **Plugin Skills** (via the `Skill` tool):
+            - The `design-docs` plugin is installed, exposing skills like
+              `design-search`, `design-index`, `design-link`, `plan-explore`, and
+              `plan-list`. Use them to pull *context* about the repo's design and
+              plans while reviewing (see section 1.7). Other repos may install
+              additional plugins; use whatever skills are available when relevant.
 
             ---
 
@@ -612,12 +662,10 @@ jobs:
             All validation checks have already run before this review. Check their status by filtering to only the checks we care about:
 
             ```bash
-            gh api repos/${{ github.repository }}/commits/${{ github.event.pull_request.head.sha }}/check-runs | \
-              jq --argjson names '["PR Title Validation","Conventional Commits","Code Quality","Markdown","Tests"]' \
-              '.check_runs[] | select([.name] | inside($names)) | {name, status, conclusion, details_url}'
+            bash .github/scripts/gh-pr-review.sh check-status ${{ github.event.pull_request.head.sha }}
             ```
 
-            This filters to only the validation checks we care about:
+            This wraps the `gh api ... | jq ...` pipe in a single allowlisted command so the bash policy doesn't reject it, and filters to only the validation checks we care about:
               - **PR Title Validation** - Ensures PR title follows conventional commits
               - **Conventional Commits** - Validates all commit messages
               - **Code Quality** - Biome linting and formatting
@@ -643,7 +691,9 @@ jobs:
               pullNumber: ${{ github.event.pull_request.number }}
             )
             ```
-            Filter for your comments (author.login == "${{ inputs.app-bot-name }}")
+            Filter for your comments (author.login == "${{ vars.APP_BOT_NAME }}").
+            Also note any open threads authored by `copilot[bot]` - you are
+            expected to resolve those too once their issues are fixed (see Step 2).
 
             ## 1.5 Get Previous Top-Level Comments
             ```
@@ -653,7 +703,7 @@ jobs:
               issue_number: ${{ github.event.pull_request.number }}
             )
             ```
-            Filter for your comments (user.login == "${{ inputs.app-bot-name }}")
+            Filter for your comments (user.login == "${{ vars.APP_BOT_NAME }}")
 
             ## 1.6 Detect Force-Pushes
 
@@ -682,6 +732,24 @@ jobs:
             - Try to fetch those commits using `mcp__github__get_commit`
             - If commits return 404 → force-push occurred, inline comments are orphaned
 
+            ## 1.7 Design Docs and Plans (context only)
+
+            This repo may ship design documentation under `.claude/design/` and
+            implementation plans under `.claude/plans/`. The `design-docs` plugin
+            is installed - use its skills (via the `Skill` tool) to pull *context*
+            on why the code is shaped the way it is:
+
+            - `design-search` - full-text search across design docs for a topic or decision
+            - `design-index` / `design-link` - find which doc covers an area and how docs relate
+            - `plan-explore` / `plan-list` - see active implementation plans
+
+            Use these to inform your review - for example, to check whether a change
+            aligns with a documented decision, or to understand intent before
+            flagging something as wrong. **This is the ONLY way you should touch
+            those files.** Do NOT review, diff, or comment on the design and plan
+            files themselves - they remain out of scope (see Step 3). Treat them as
+            reference material, not as changes to critique.
+
             ---
 
             # Step 2: Determine Review Strategy
@@ -709,7 +777,7 @@ jobs:
             **If fixed:** Reply to the existing review comment thread and mark as resolved:
 
             ```bash
-            bash .github/scripts/resolve-thread.sh <comment_id> ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+            bash .github/scripts/gh-pr-review.sh resolve-thread <comment_id> ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
             ```
 
             Replace `<comment_id>` with the actual numeric comment ID from the review comment.
@@ -721,6 +789,25 @@ jobs:
             ```
 
             Replace `<comment_id>` with the actual numeric comment ID.
+
+            ### For Copilot's Comments:
+
+            GitHub Copilot sometimes leaves its own review comments on the PR.
+            Treat open `copilot[bot]` threads the same way you treat your own:
+
+            1. Read the file at the line Copilot flagged and check whether a later
+               push has fixed the issue.
+            2. **If fixed:** resolve the thread with the same command, using
+               Copilot's comment ID:
+
+               ```bash
+               bash .github/scripts/gh-pr-review.sh resolve-thread <copilot_comment_id> ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+               ```
+
+            3. **If still unaddressed:** leave it alone. Do not resolve a Copilot
+               thread whose issue still stands, and do not re-litigate a valid
+               Copilot point - if you agree and it's unfixed, you may reinforce it
+               in your summary.
 
             ### For New Issues:
             - Create pending review first: `mcp__github__pull_request_review_write(method: "create", event: omitted for pending)`
@@ -742,7 +829,8 @@ jobs:
 
             **IMPORTANT - Sticky Comment Feature:**
             - This workflow uses sticky comments - your main review comment is automatically updated in place
-            - The sticky comment ID is available in the environment variable `CLAUDE_COMMENT_ID` (0 if this is the first review)
+            - The sticky comment ID for this PR is `${{ env.CLAUDE_COMMENT_ID }}` (`0` means this is the first review).
+              The value is inlined here - do NOT try to read `$CLAUDE_COMMENT_ID` from the shell, that command will be denied.
             - **CRITICAL:** Include `<!-- claude-code-review -->` at the start of your main review comment (after the heading) so it can be identified and updated
             - **DO NOT minimize the sticky comment** - it will be updated automatically
             - Only minimize OTHER old review comments (e.g., from before sticky comments were enabled)
@@ -761,7 +849,7 @@ jobs:
             **If you need to minimize old non-sticky comments (RARE):**
 
             ```bash
-            bash .github/scripts/minimize-all-reviews.sh ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+            bash .github/scripts/gh-pr-review.sh minimize-old-summaries ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
             ```
 
             This automatically excludes the sticky comment (ID: ${{ env.CLAUDE_COMMENT_ID }}) and minimizes only old review comments.
@@ -777,6 +865,29 @@ jobs:
             ---
 
             # Step 3: What to Review
+
+            ## Out of Scope - Do NOT Review
+
+            Some changed files are not worth reviewing. Skip them entirely - do not
+            comment on their contents, style, or formatting:
+
+            - **Build artifacts in any `dist/` directory.** Generated output is
+              sometimes committed deliberately (e.g. a bundled GitHub Action that
+              runs from `dist/`). Treat any path containing a `dist/` segment as
+              generated; do not flag it. If a `dist/` change looks wrong, comment
+              on the *source* that produces it, not the artifact.
+            - **Local agent working directories**, if present:
+              `.claude/design/`, `.claude/specs/`, `.claude/plans/`, and
+              `.claude/notes/`. These hold design notes, specs, plans, and scratch
+              docs - not shippable code. Skip changes confined to these paths.
+            - **Lockfiles and generated changelogs.** Don't review churn in
+              `pnpm-lock.yaml`, `package-lock.json`, `yarn.lock`, `bun.lockb`, or
+              `CHANGELOG.md` - these are tool-generated. Discuss a dependency
+              change only via the `package.json` manifest edit that caused it,
+              never the lockfile diff.
+
+            Still *count* these files when reasoning about the PR's scope, but spend
+            your review effort on the source and product code.
 
             ## Code Quality
             - Follow existing patterns in the codebase
@@ -821,11 +932,44 @@ jobs:
                - Create pending review
                - Add all inline comments
                - Submit review with summary
-            6. **If you encounter errors:**
+            6. **If you hit tool or permission limits:**
                - Permission errors (file access, tool execution, etc.)
                - Tool failures (MCP tools, gh CLI, helper scripts)
                - API errors or rate limits
-               - **Include a note in your review** mentioning what failed so maintainers can investigate
+               - A tool or permission you do NOT have but believe you need to
+                 review effectively (e.g. a denied command, a missing MCP method,
+                 or read access you lack)
+               - **Include a note in your review** describing what failed or what
+                 you were missing, so a human can investigate and grant or fix it
+            7. **Consider approval:** If the PR is clean, submit a formal approval
+               (see "Approving the PR" below). When it isn't, post your summary
+               without approving.
+
+            ## Approving the PR
+
+            When the PR is in a clean state, submit a formal GitHub approval so
+            maintainers get an unambiguous signal. Approve ONLY when ALL hold:
+
+            - Every issue you previously reported is resolved (threads replied to
+              and marked resolved).
+            - You have no new issues to report on the current commit. Purely
+              positive feedback or minor, non-actionable nits are fine; an open
+              actionable problem is not.
+            - The validation checks (section 1.3) are passing or neutrally skipped.
+              Never approve when any check has a `failure` conclusion, or while
+              checks are still `in_progress`.
+
+            If every condition holds:
+
+            ```bash
+            bash .github/scripts/gh-pr-review.sh approve-pr ${{ github.event.pull_request.number }} ${{ github.event.pull_request.head.sha }}
+            ```
+
+            Do NOT approve when:
+            - Any actionable issue remains open - post your summary without approving.
+            - This PR was opened by the review bot itself (`${{ vars.APP_BOT_NAME }}`) - maintainers will handle it.;
+              GitHub rejects self-approval, so just post your summary.
+            - You are unsure. Withholding approval is always the safe default.
 
             ## Comment Quality Rules
 
@@ -837,7 +981,7 @@ jobs:
             6. **Be efficient** - one clear comment beats many scattered ones
             7. **Be kind** - focus on the code, not the person
             8. **Track commit SHAs** - mention current SHA in your summary for force-push detection
-            9. **Report tool/permission errors** - If you encounter permission errors, tool failures, or script errors during the review, mention them in your review comment so the maintainers are aware
+            9. **Report tool/permission gaps** - If you hit permission errors, tool failures, or script errors during the review - OR if you lack a tool or permission you believe you need to review effectively - mention it in your review comment so maintainers are aware and can resolve it
 
             ---
 
@@ -854,9 +998,71 @@ jobs:
             2. **Use the sticky comment** - Your main review updates automatically, don't create duplicates
             3. **Avoid review spam** - PR conversations should be clean and easy to follow
 
+            ## Execution Environment - READ THIS
+
+            You are running **non-interactively** inside a GitHub Actions job. There is
+            no user, and **there is no next turn**. When you end your turn, the process
+            is killed immediately and anything you have not already written is lost.
+
+            - **NEVER end your turn to wait for something.** No background work, no
+              "I'll pause for notifications", no "waiting for results". Nothing will
+              ever arrive. If you stop, the review is silently lost and the job still
+              reports success.
+            - **Do all work inline, in this session.** Subagent dispatch is disabled.
+            - **Posting is the last thing you do.** Before you finish, you MUST have
+              called `mcp__github_comment__update_claude_comment` with your complete
+              review. A run that ends without that call is a failed review, and a
+              follow-up job will fail the build for it.
+            - If you run low on budget or context, **post what you have immediately**
+              with a note about what you did not get to. A partial posted review beats
+              a complete unposted one.
+
+            **Bash allowlist:** commands are matched against fixed prefixes. Anything
+            containing command substitution (`$(...)`), variable expansion (`$VAR`),
+            loops, or `;` chaining will be **denied**. Write plain, single-purpose
+            commands with literal arguments, and run them one at a time.
+
+      - name: Verify a review was actually posted
+        if: steps.create-check.outputs.should-skip != 'true' && steps.claude-review-action.outcome == 'success'
+        id: verify-review
+        uses: actions/github-script@v9
+        with:
+          github-token: ${{ steps.app-token.outputs.token }}
+          script: |
+            // The action exits 0 even when the review session ends without posting
+            // anything (e.g. it ended its turn waiting on background work). Without
+            // this guard that failure mode is invisible: green job, no review.
+            const sha = context.payload.pull_request.head.sha;
+            const shortSha = sha.substring(0, 7);
+            const botName = '${{ vars.APP_BOT_NAME }}';
+
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number,
+              per_page: 100
+            });
+
+            const posted = comments.some(comment =>
+              comment.user.login === botName &&
+              comment.body.includes('<!-- claude-code-review -->') &&
+              (comment.body.includes(sha) || comment.body.includes(shortSha))
+            );
+
+            if (!posted) {
+              core.setFailed(
+                `Claude Code Review exited successfully but posted no review comment for ${shortSha}. ` +
+                `The session most likely ended without calling mcp__github_comment__update_claude_comment. ` +
+                `Check the "Run Claude Code Review" step output for the final result message, then re-run this job.`
+              );
+              return;
+            }
+
+            console.log(`Review comment for ${shortSha} confirmed.`);
+
       - name: Complete check - Review skipped
         if: always() && steps.create-check.outputs.should-skip == 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -865,7 +1071,7 @@ jobs:
 
       - name: Complete check - Review completed
         if: always() && steps.create-check.outputs.should-skip != 'true'
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |
@@ -888,14 +1094,22 @@ jobs:
 
             const checkRunId = process.env.CHECK_RUN_ID;
             const reviewResult = '${{ steps.claude-review-action.outcome }}';
+            // 'failure' here means the action succeeded but posted nothing.
+            const verifyResult = '${{ steps.verify-review.outcome }}';
 
-            const conclusion = reviewResult === 'success' ? 'success' :
-                              reviewResult === 'failure' ? 'failure' :
+            const notPosted = verifyResult === 'failure';
+            const conclusion = (reviewResult === 'failure' || notPosted) ? 'failure' :
+                              reviewResult === 'success' ? 'success' :
                               'neutral';
 
-            const title = reviewResult === 'success' ? 'Review completed' :
+            const title = notPosted ? 'Review produced no comment' :
                          reviewResult === 'failure' ? 'Review failed' :
+                         reviewResult === 'success' ? 'Review completed' :
                          'Review completed with warnings';
+
+            const summary = notPosted
+              ? 'Claude Code Review ran to completion but never posted a review comment for this commit. This is a review failure, not a code failure - re-run the job.'
+              : 'Claude Code Review has completed. Check the pull request comments for detailed feedback.';
 
             await updateCheckWithRetry({
               owner: context.repo.owner,
@@ -905,14 +1119,14 @@ jobs:
               conclusion: conclusion,
               output: {
                 title: title,
-                summary: 'Claude Code Review has completed. Check the pull request comments for detailed feedback.'
+                summary: summary
               }
             });
 
   cleanup:
     name: Cleanup
     needs: [validate, claude-review]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     if: always()
     permissions:
       checks: write
@@ -921,12 +1135,12 @@ jobs:
         id: app-token
         uses: actions/create-github-app-token@v3
         with:
-          app-id: ${{ secrets.APP_ID }}
+          client-id: ${{ vars.APP_CLIENT_ID }}
           private-key: ${{ secrets.APP_PRIVATE_KEY }}
           permission-checks: write
 
       - name: Cleanup in-progress checks
-        uses: actions/github-script@v8
+        uses: actions/github-script@v9
         with:
           github-token: ${{ steps.app-token.outputs.token }}
           script: |

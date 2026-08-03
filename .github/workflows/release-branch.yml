@@ -7,6 +7,16 @@ on:
         description: Run in dry-run mode
         type: boolean
         default: false
+      runner:
+        description: Runner type (e.g., ubuntu-latest)
+        type: string
+        required: false
+        default: ubuntu-latest
+      auto-merge:
+        description: Auto-merge strategy for pull requests (e.g., "squash", "merge", "rebase")
+        type: string
+        required: false
+        default: ""
     secrets:
       APP_ID:
         required: true
@@ -21,29 +31,39 @@ on:
 jobs:
   manage-branch:
     name: Manage Release Branch
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
+    env:
+      TURBO_TELEMETRY_DISABLED: "1"
+      DO_NOT_TRACK: "1"
+      TURBO_RUN_SUMMARY: "1"
     permissions:
       contents: write
       pull-requests: write
     steps:
       - name: Checkout
-        uses: actions/checkout@v6
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
           token: ${{ secrets.GITHUB_TOKEN }}
           persist-credentials: true
-          lfs: true
-
       - name: Setup runtime
         id: runtime
-        uses: savvy-web/workflow-runtime-action@main
+        uses: savvy-web/silk-runtime-action@v1
+        with:
+          turbo-s3-bucket: ${{ secrets.TURBO_S3_BUCKET }}
+          turbo-s3-region: ${{ secrets.TURBO_S3_REGION }}
+          turbo-s3-endpoint: ${{ secrets.TURBO_S3_ENDPOINT }}
+          turbo-s3-access-key-id: ${{ secrets.TURBO_S3_ACCESS_KEY_ID }}
+          turbo-s3-secret-access-key: ${{ secrets.TURBO_S3_SECRET_ACCESS_KEY }}
+          install-deps: false
 
       - name: Run release
-        uses: savvy-web/workflow-release-action@main
+        uses: savvy-web/silk-release-action@v4
         with:
           phase: branch-management
-          app-id: ${{ secrets.APP_ID }}
-          private-key: ${{ secrets.APP_PRIVATE_KEY }}
-          github-token: ${{ secrets.GITHUB_TOKEN }}
+          app-client-id: ${{ vars.APP_CLIENT_ID }}
+          app-private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          auto-merge: ${{ inputs.auto-merge }}
           dry-run: ${{ inputs.dry-run }}
+          release-branch: changeset-release/main
           custom-registries: ${{ secrets.CUSTOM_REGISTRIES }}
