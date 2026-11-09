@@ -58,7 +58,7 @@ jobs:
           install-deps: false
 
       - name: Run release
-        uses: savvy-web/silk-release-action@v4
+        uses: savvy-web/silk-release-action@v5
         with:
           phase: branch-management
           app-client-id: ${{ vars.APP_CLIENT_ID }}
